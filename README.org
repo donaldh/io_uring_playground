@@ -1,0 +1,49 @@
+* io_uring playground
+
+Code for experimenting with io_uring for network I/O.
+
+** Prerequisites
+
+- A recent 5.x kernel (5.19 for multi-shot accept)
+- ~dnf install liburing~ (or build from source for 5.19 features)
+
+** Build
+
+#+begin_src sh :results output
+$ make
+binaries             Build all the binaries
+clean                Remove generated files
+help                 This help
+#+end_src
+
+** Run
+
+Run the echo server
+
+#+begin_src sh :results output
+./bin/simple_echo_server
+#+end_src
+
+Then run the test client
+
+#+begin_src sh :results output
+./bin/client -n 10000
+#+end_src
+
+** Usage
+
+#+begin_src sh :results output
+$ ./bin/client --help
+Usage: client [OPTION...]
+Echo client
+
+Usage: ./client
+
+  -c, --concurrent=number    Number of concurrent requests
+  -d, --debug                Provide debug output
+  -h, --host=address         Address of host
+  -n, --times=number         Repeat number of times
+  -p, --port=number          Port number of echo service
+  -?, --help                 Give this help list
+      --usage                Give a short usage message
+#+end_src
