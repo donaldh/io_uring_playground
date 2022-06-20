@@ -18,6 +18,7 @@ enum event_type {
 };
 
 int async_sqes = 0;
+int multishot = 0;
 int debug = 0;
 
 struct request {
@@ -44,11 +45,15 @@ int add_accept_request(int listen_socket,
                        struct sockaddr_in *client_addr,
                        socklen_t *client_addr_len) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    io_uring_prep_accept(sqe,
-                         listen_socket,
-                         (struct sockaddr *) client_addr,
-                         client_addr_len,
-                         0);
+    if (multishot) {
+        io_uring_prep_multishot_accept(sqe, listen_socket,
+                                       (struct sockaddr *)client_addr,
+                                       client_addr_len, 0);
+    } else {
+        io_uring_prep_accept(sqe, listen_socket,
+                             (struct sockaddr *)client_addr,
+                             client_addr_len, 0);
+    }
     struct request *req = malloc(sizeof(struct request));
     req->type = ACCEPT;
     io_uring_sqe_set_data(sqe, req);
@@ -91,6 +96,7 @@ int add_close_request(int socket) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     struct request *req = malloc(sizeof(*req) + sizeof(struct iovec));
     req->type = CLOSE;
+    req->socket = socket;
     io_uring_prep_close(sqe, socket);
     io_uring_sqe_set_data(sqe, req);
     if (async_sqes)
@@ -104,10 +110,14 @@ void main_loop(int listen_socket) {
     struct sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
 
-    unsigned space = io_uring_sq_space_left(&ring);
-    while (space > 0) {
+    if (multishot) {
         add_accept_request(listen_socket, &client_addr, &client_addr_len);
-        space--;
+    } else {
+        unsigned space = io_uring_sq_space_left(&ring);
+        while (space > 0) {
+            add_accept_request(listen_socket, &client_addr, &client_addr_len);
+            space--;
+        }
     }
     io_uring_submit(&ring);
 
@@ -120,6 +130,7 @@ void main_loop(int listen_socket) {
         }
 
         struct request *req = (struct request*) cqe->user_data;
+        int err = EAGAIN;
         if (cqe->res < 0) {
             fprintf(stderr, "Async request failed: %s for event: %d\n",
                     strerror(-cqe->res), req->type);
@@ -129,7 +140,13 @@ void main_loop(int listen_socket) {
         switch (req->type) {
         case ACCEPT:
             if (debug) fprintf(stderr, "ACCEPT %d\n", cqe->res);
-            add_accept_request(listen_socket, &client_addr, &client_addr_len);
+            if (cqe->flags & IORING_CQE_F_MORE) {
+                fprintf(stderr, "more\n");
+            }
+            if (!multishot || (cqe->flags & IORING_CQE_F_MORE) == 0) {
+                if (debug) fprintf(stderr, "Adding accept request\n");
+                add_accept_request(listen_socket, &client_addr, &client_addr_len);
+            }
             add_read_request(cqe->res);
             io_uring_submit(&ring);
             free(req);
@@ -154,7 +171,7 @@ void main_loop(int listen_socket) {
             free(req);
             break;
         case CLOSE:
-            if (debug) fprintf(stderr, "CLOSE %d\n", cqe->res);
+            if (debug) fprintf(stderr, "CLOSE %d returned %d\n", req->socket, cqe->res);
             close_count++;
             free(req);
             break;
@@ -174,8 +191,11 @@ int create_listen(int port) {
     }
 
     int enable = 1;
-    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) {
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
         fatal_error("setsockopt(SO_REUSEADDR)");
+    }
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable)) < 0) {
+        fatal_error("setsockopt(SO_REUSEPORT");
     }
 
     memset(&addr, 0, sizeof(addr));
@@ -187,7 +207,7 @@ int create_listen(int port) {
         fatal_error("bind()");
     }
 
-    if (listen(sock, 10) < 0) {
+    if (listen(sock, 128) < 0) {
         fatal_error("listen()");
     }
 
@@ -202,6 +222,7 @@ const char argp_program_doc[] =
 
 static const struct argp_option opts[] = {
     {"async", 'a', 0, 0, "Submit async requests"},
+    {"multishot", 'm', 0, 0, "Use multishot accept requests"},
     {"debug", 'd', 0, 0, "Provide debug output"},
     {},
 };
@@ -211,6 +232,9 @@ error_t parse_opts (int key, char *arg, struct argp_state *state)
     switch (key) {
     case 'a':
         async_sqes = 1;
+        break;
+    case 'm':
+        multishot = 1;
         break;
     case 'd':
         debug = 1;
