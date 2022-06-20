@@ -5,7 +5,9 @@ Code for experimenting with io_uring for network I/O.
 ** Prerequisites
 
 - A recent 5.x kernel (5.19 for multi-shot accept)
-- ~dnf install liburing~ (or build from source for 5.19 features)
+- ~dnf install liburing-devel~ (or build from source for 5.19 features)
+
+If you are using Fedora then I recommend Fedora 36 to get recent packages.
 
 ** Build
 
