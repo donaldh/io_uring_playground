@@ -177,7 +177,7 @@ void loop(char *host, char *port) {
             break;
         case READ:
             read_count++;
-            //fprintf(stderr, "READ %d\n", cqe->res);
+            if (debug) fprintf(stderr, "READ %d\n", cqe->res);
             close(req->client_socket);
             free(req->iov[0].iov_base);
             free(req);
@@ -185,7 +185,7 @@ void loop(char *host, char *port) {
             break;
         case WRITE:
             write_count++;
-            //fprintf(stderr, "WRITE %d\n", cqe->res);
+            if (debug) fprintf(stderr, "WRITE %d\n", cqe->res);
             add_read_request(req->client_socket);
             io_uring_submit(&ring);
             free(req->iov[0].iov_base);
