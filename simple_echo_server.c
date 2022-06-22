@@ -145,11 +145,11 @@ void main_loop(int listen_socket) {
             }
             if (!multishot || (cqe->flags & IORING_CQE_F_MORE) == 0) {
                 if (debug) fprintf(stderr, "Adding accept request\n");
+                free(req);
                 add_accept_request(listen_socket, &client_addr, &client_addr_len);
             }
             add_read_request(cqe->res);
             io_uring_submit(&ring);
-            free(req);
             break;
         case READ:
             if (debug) fprintf(stderr, "READ %d\n", cqe->res);
@@ -174,6 +174,9 @@ void main_loop(int listen_socket) {
             if (debug) fprintf(stderr, "CLOSE %d returned %d\n", req->socket, cqe->res);
             close_count++;
             free(req);
+            break;
+        default:
+            fprintf(stderr, "Unexpected req type %d\n", req->type);
             break;
         }
 
