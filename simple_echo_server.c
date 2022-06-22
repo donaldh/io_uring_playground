@@ -9,6 +9,7 @@
 #define SERVER_PORT 3333
 #define QUEUE_DEPTH 256
 #define READ_SIZE   1024
+#define MAX_SQE_PER_LOOP   2
 
 enum event_type {
     ACCEPT,
@@ -18,6 +19,7 @@ enum event_type {
 };
 
 int async_sqes = 0;
+int batch = 0;
 int multishot = 0;
 int debug = 0;
 
@@ -124,62 +126,80 @@ void main_loop(int listen_socket) {
     int close_count = 0;
 
     while (1) {
-        int ret = io_uring_wait_cqe(&ring, &cqe);
-        if (ret < 0) {
-            fatal_error("io_uring_wait_cqe");
-        }
-
-        struct request *req = (struct request*) cqe->user_data;
-        int err = EAGAIN;
-        if (cqe->res < 0) {
-            fprintf(stderr, "Async request failed: %s for event: %d\n",
-                    strerror(-cqe->res), req->type);
-            exit(1);
-        }
-
-        switch (req->type) {
-        case ACCEPT:
-            if (debug) fprintf(stderr, "ACCEPT %d%s\n", cqe->res,
-                               cqe->flags & IORING_CQE_F_MORE ? " (more)" : "");
-
-            if (!multishot || (cqe->flags & IORING_CQE_F_MORE) == 0) {
-                if (debug) fprintf(stderr, "Adding accept request\n");
-                free(req);
-                add_accept_request(listen_socket, &client_addr, &client_addr_len);
+        int submissions = 0;
+        while (1) {
+            int ret = batch
+                ? io_uring_peek_cqe(&ring, &cqe)
+                : io_uring_wait_cqe(&ring, &cqe);
+            if (ret == -EAGAIN) {
+                break;
             }
-            add_read_request(cqe->res);
-            io_uring_submit(&ring);
-            break;
-        case READ:
-            if (debug) fprintf(stderr, "READ %d\n", cqe->res);
-            if (cqe->res <= 0) {
-                close_count++;
-                fprintf(stderr, "Empty read, closing\n");
-                close(req->socket);
+
+            if (ret < 0) {
+                fatal_error("io_uring_wait_cqe");
+            }
+
+            struct request *req = (struct request *)cqe->user_data;
+            int err = EAGAIN;
+            if (cqe->res < 0) {
+                fprintf(stderr, "Async request failed: %s for event: %d\n",
+                        strerror(-cqe->res), req->type);
+                exit(1);
+            }
+
+            switch (req->type) {
+            case ACCEPT:
+                if (debug) fprintf(stderr, "ACCEPT %d%s\n", cqe->res,
+                                   cqe->flags & IORING_CQE_F_MORE ? " (more)" : "");
+
+                if (!multishot || (cqe->flags & IORING_CQE_F_MORE) == 0) {
+                    if (debug) fprintf(stderr, "Adding accept request\n");
+                    free(req);
+                    add_accept_request(listen_socket, &client_addr, &client_addr_len);
+                    submissions += 1;
+                }
+                add_read_request(cqe->res);
+                submissions += 1;
+                break;
+            case READ:
+                if (debug) fprintf(stderr, "READ %d\n", cqe->res);
+                if (cqe->res <= 0) {
+                    close_count++;
+                    fprintf(stderr, "Empty read, closing\n");
+                    close(req->socket);
+                    free(req->iov[0].iov_base);
+                    free(req);
+                    break;
+                }
+                add_write_request(req);
+                add_close_request(req->socket);
+                submissions += 2;
+                break;
+            case WRITE:
+                if (debug) fprintf(stderr, "WRITE %d\n", cqe->res);
                 free(req->iov[0].iov_base);
                 free(req);
                 break;
+            case CLOSE:
+                if (debug) fprintf(stderr, "CLOSE %d returned %d\n", req->socket, cqe->res);
+                close_count++;
+                free(req);
+                break;
+            default:
+                fprintf(stderr, "Unexpected req type %d\n", req->type);
+                break;
             }
-            add_write_request(req);
-            add_close_request(req->socket);
-            io_uring_submit(&ring);
-            break;
-        case WRITE:
-            if (debug) fprintf(stderr, "WRITE %d\n", cqe->res);
-            free(req->iov[0].iov_base);
-            free(req);
-            break;
-        case CLOSE:
-            if (debug) fprintf(stderr, "CLOSE %d returned %d\n", req->socket, cqe->res);
-            close_count++;
-            free(req);
-            break;
-        default:
-            fprintf(stderr, "Unexpected req type %d\n", req->type);
-            break;
+
+            io_uring_cqe_seen(&ring, cqe);
+            if (!batch || io_uring_sq_space_left(&ring) < MAX_SQE_PER_LOOP) {
+                break;
+            }
         }
 
-        io_uring_cqe_seen(&ring, cqe);
+        if (submissions > 0) {
+            if (debug) fprintf(stderr, "Submitting %d SQEs\n", submissions);
+            io_uring_submit(&ring);
+        }
     }
 }
 
@@ -224,6 +244,7 @@ const char argp_program_doc[] =
 
 static const struct argp_option opts[] = {
     {"async", 'a', 0, 0, "Submit async requests"},
+    {"batch", 'b', 0, 0, "Batch available work into single submission"},
     {"multishot", 'm', 0, 0, "Use multishot accept requests"},
     {"debug", 'd', 0, 0, "Provide debug output"},
     {},
@@ -234,6 +255,9 @@ error_t parse_opts (int key, char *arg, struct argp_state *state)
     switch (key) {
     case 'a':
         async_sqes = 1;
+        break;
+    case 'b':
+        batch = 1;
         break;
     case 'm':
         multishot = 1;
