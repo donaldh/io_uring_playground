@@ -127,10 +127,9 @@ void main_loop(int listen_socket) {
 
     while (1) {
         int submissions = 0;
+
+        int ret = io_uring_wait_cqe(&ring, &cqe);
         while (1) {
-            int ret = batch
-                ? io_uring_peek_cqe(&ring, &cqe)
-                : io_uring_wait_cqe(&ring, &cqe);
             if (ret == -EAGAIN) {
                 break;
             }
@@ -193,6 +192,10 @@ void main_loop(int listen_socket) {
             io_uring_cqe_seen(&ring, cqe);
             if (!batch || io_uring_sq_space_left(&ring) < MAX_SQE_PER_LOOP) {
                 break;
+            }
+
+            if (batch) {
+                ret = io_uring_peek_cqe(&ring, &cqe);
             }
         }
 
