@@ -139,10 +139,9 @@ void main_loop(int listen_socket) {
 
         switch (req->type) {
         case ACCEPT:
-            if (debug) fprintf(stderr, "ACCEPT %d\n", cqe->res);
-            if (cqe->flags & IORING_CQE_F_MORE) {
-                fprintf(stderr, "more\n");
-            }
+            if (debug) fprintf(stderr, "ACCEPT %d%s\n", cqe->res,
+                               cqe->flags & IORING_CQE_F_MORE ? " (more)" : "");
+
             if (!multishot || (cqe->flags & IORING_CQE_F_MORE) == 0) {
                 if (debug) fprintf(stderr, "Adding accept request\n");
                 free(req);
