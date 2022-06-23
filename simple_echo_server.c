@@ -128,7 +128,7 @@ void main_loop(int listen_socket) {
 
         int ret = io_uring_wait_cqe(&ring, &cqe);
         while (1) {
-            if (ret == -EAGAIN) {
+            if (ret == -EAGAIN || ret == -EINTR) {
                 break;
             }
 
