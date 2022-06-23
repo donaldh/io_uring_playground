@@ -123,8 +123,6 @@ void main_loop(int listen_socket) {
     }
     io_uring_submit(&ring);
 
-    int close_count = 0;
-
     while (1) {
         int submissions = 0;
 
@@ -163,7 +161,6 @@ void main_loop(int listen_socket) {
             case READ:
                 if (debug) fprintf(stderr, "READ %d\n", cqe->res);
                 if (cqe->res <= 0) {
-                    close_count++;
                     fprintf(stderr, "Empty read, closing\n");
                     close(req->socket);
                     free(req->iov[0].iov_base);
@@ -181,7 +178,6 @@ void main_loop(int listen_socket) {
                 break;
             case CLOSE:
                 if (debug) fprintf(stderr, "CLOSE %d returned %d\n", req->socket, cqe->res);
-                close_count++;
                 free(req);
                 break;
             default:
