@@ -160,14 +160,15 @@ void main_loop(int listen_socket) {
             case READ:
                 if (debug > 1) fprintf(stderr, "READ %d\n", cqe->res);
                 if (cqe->res <= 0) {
-                    fprintf(stderr, "Empty read, closing\n");
-                    close(req->socket);
+                    add_close_request(req->socket);
+                    submissions += 1;
+
                     free(req->iov[0].iov_base);
                     free(req);
                     break;
                 }
                 add_write_request(req);
-                add_close_request(req->socket);
+                add_read_request(req->socket);
                 submissions += 2;
                 break;
             case WRITE:
