@@ -145,11 +145,11 @@ void main_loop(int listen_socket) {
 
             switch (req->type) {
             case ACCEPT:
-                if (debug) fprintf(stderr, "ACCEPT %d%s\n", cqe->res,
+                if (debug > 1) fprintf(stderr, "ACCEPT %d%s\n", cqe->res,
                                    cqe->flags & IORING_CQE_F_MORE ? " (more)" : "");
 
                 if (!multishot || (cqe->flags & IORING_CQE_F_MORE) == 0) {
-                    if (debug) fprintf(stderr, "Adding accept request\n");
+                    if (debug > 2) fprintf(stderr, "Adding accept request\n");
                     free(req);
                     add_accept_request(listen_socket, &client_addr, &client_addr_len);
                     submissions += 1;
@@ -158,7 +158,7 @@ void main_loop(int listen_socket) {
                 submissions += 1;
                 break;
             case READ:
-                if (debug) fprintf(stderr, "READ %d\n", cqe->res);
+                if (debug > 1) fprintf(stderr, "READ %d\n", cqe->res);
                 if (cqe->res <= 0) {
                     fprintf(stderr, "Empty read, closing\n");
                     close(req->socket);
@@ -171,12 +171,12 @@ void main_loop(int listen_socket) {
                 submissions += 2;
                 break;
             case WRITE:
-                if (debug) fprintf(stderr, "WRITE %d\n", cqe->res);
+                if (debug > 1) fprintf(stderr, "WRITE %d\n", cqe->res);
                 free(req->iov[0].iov_base);
                 free(req);
                 break;
             case CLOSE:
-                if (debug) fprintf(stderr, "CLOSE %d returned %d\n", req->socket, cqe->res);
+                if (debug > 1) fprintf(stderr, "CLOSE %d returned %d\n", req->socket, cqe->res);
                 free(req);
                 break;
             default:
@@ -244,7 +244,7 @@ static const struct argp_option opts[] = {
     {"async", 'a', 0, 0, "Submit async requests"},
     {"batch", 'b', 0, 0, "Batch available work into single submission"},
     {"multishot", 'm', 0, 0, "Use multishot accept requests"},
-    {"debug", 'd', 0, 0, "Provide debug output"},
+    {"debug", 'd', 0, 0, "Provide debug output, repeat for more verbose debug"},
     {},
 };
 
@@ -261,7 +261,7 @@ error_t parse_opts (int key, char *arg, struct argp_state *state)
         multishot = 1;
         break;
     case 'd':
-        debug = 1;
+        debug += 1;
         break;
     default:
       return ARGP_ERR_UNKNOWN;
