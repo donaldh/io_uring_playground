@@ -137,7 +137,6 @@ void main_loop(int listen_socket) {
             }
 
             struct request *req = (struct request *)cqe->user_data;
-            int err = EAGAIN;
             if (cqe->res < 0) {
                 fprintf(stderr, "Async request failed: %s for event: %d\n",
                         strerror(-cqe->res), req->type);
