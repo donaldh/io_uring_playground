@@ -20,6 +20,7 @@ enum event_type {
 
 int async_sqes = 0;
 int batch = 0;
+int sq_poll = 0;
 int multishot = 0;
 int debug = 0;
 
@@ -245,6 +246,7 @@ static const struct argp_option opts[] = {
     {"async", 'a', 0, 0, "Submit async requests"},
     {"batch", 'b', 0, 0, "Batch available work into single submission"},
     {"multishot", 'm', 0, 0, "Use multishot accept requests"},
+    {"sqpoll", 'p', 0, 0, "Use submission queue polling in the kernel"},
     {"debug", 'd', 0, 0, "Provide debug output, repeat for more verbose debug"},
     {},
 };
@@ -260,6 +262,9 @@ error_t parse_opts (int key, char *arg, struct argp_state *state)
         break;
     case 'm':
         multishot = 1;
+        break;
+    case 'p':
+        sq_poll = 1;
         break;
     case 'd':
         debug += 1;
@@ -284,7 +289,7 @@ int main(int argc, char *argv[]) {
     int listen_socket = create_listen(SERVER_PORT);
 
     signal(SIGINT, signal_handler);
-    io_uring_queue_init(QUEUE_DEPTH, &ring, 0);
+    io_uring_queue_init(QUEUE_DEPTH, &ring, sq_poll ? IORING_SETUP_SQPOLL : 0);
     main_loop(listen_socket);
 
     return 0;
