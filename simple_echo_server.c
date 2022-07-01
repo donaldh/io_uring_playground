@@ -29,8 +29,7 @@ int debug = 0;
 struct request {
     enum event_type type;
     int socket;
-    int iovec_count;
-    struct iovec iov[];
+    char buffer[READ_SIZE];
 };
 
 struct io_uring ring;
@@ -74,14 +73,12 @@ int add_accept_request(int listen_socket,
 
 int add_read_request(int socket) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    struct request *req = malloc(sizeof(*req) + sizeof(struct iovec));
-    req->iov[0].iov_base = malloc(READ_SIZE);
-    req->iov[0].iov_len = READ_SIZE;
+    struct request *req = malloc(sizeof(struct request));
     req->type = READ;
     req->socket = socket;
-    memset(req->iov[0].iov_base, 0, READ_SIZE);
+    memset(req->buffer, 0, READ_SIZE);
 
-    io_uring_prep_readv(sqe, socket, &req->iov[0], 1, 0);
+    io_uring_prep_recv(sqe, socket, req->buffer, READ_SIZE, 0);
     if (fixed_files) {
         io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
     }
@@ -92,10 +89,10 @@ int add_read_request(int socket) {
     return 0;
 }
 
-int add_write_request(struct request *req) {
+int add_write_request(struct request *req, int len) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     req->type = WRITE;
-    io_uring_prep_writev(sqe, req->socket, req->iov, 1, 0);
+    io_uring_prep_send(sqe, req->socket, req->buffer, len, 0);
     if (fixed_files) {
         io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
     }
@@ -108,7 +105,7 @@ int add_write_request(struct request *req) {
 
 int add_close_request(int socket) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    struct request *req = malloc(sizeof(*req) + sizeof(struct iovec));
+    struct request *req = malloc(sizeof(struct request));
     req->type = CLOSE;
     req->socket = socket;
     if (fixed_files) {
@@ -179,17 +176,15 @@ void main_loop(int listen_socket) {
                     add_close_request(req->socket);
                     submissions += 1;
 
-                    free(req->iov[0].iov_base);
                     free(req);
                     break;
                 }
-                add_write_request(req);
+                add_write_request(req, cqe->res);
                 add_read_request(req->socket);
                 submissions += 2;
                 break;
             case WRITE:
                 if (debug > 1) fprintf(stderr, "WRITE %d\n", cqe->res);
-                free(req->iov[0].iov_base);
                 free(req);
                 break;
             case CLOSE:
