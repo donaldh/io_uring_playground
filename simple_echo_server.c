@@ -9,6 +9,7 @@
 #define SERVER_PORT 3333
 #define QUEUE_DEPTH 256
 #define READ_SIZE   1024
+#define MAX_FILES   1024
 #define MAX_SQE_PER_LOOP   2
 
 enum event_type {
@@ -20,6 +21,7 @@ enum event_type {
 
 int async_sqes = 0;
 int batch = 0;
+int fixed_files = 0;
 int sq_poll = 0;
 int multishot = 0;
 int debug = 0;
@@ -57,6 +59,9 @@ int add_accept_request(int listen_socket,
                              (struct sockaddr *)client_addr,
                              client_addr_len, 0);
     }
+    if (fixed_files) {
+        sqe->file_index = IORING_FILE_INDEX_ALLOC;
+    }
     struct request *req = malloc(sizeof(struct request));
     req->type = ACCEPT;
     io_uring_sqe_set_data(sqe, req);
@@ -77,6 +82,9 @@ int add_read_request(int socket) {
     memset(req->iov[0].iov_base, 0, READ_SIZE);
 
     io_uring_prep_readv(sqe, socket, &req->iov[0], 1, 0);
+    if (fixed_files) {
+        io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
+    }
     io_uring_sqe_set_data(sqe, req);
     if (async_sqes)
         io_uring_sqe_set_flags(sqe, IOSQE_ASYNC);
@@ -88,6 +96,9 @@ int add_write_request(struct request *req) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     req->type = WRITE;
     io_uring_prep_writev(sqe, req->socket, req->iov, 1, 0);
+    if (fixed_files) {
+        io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
+    }
     io_uring_sqe_set_data(sqe, req);
     if (async_sqes)
         io_uring_sqe_set_flags(sqe, IOSQE_ASYNC);
@@ -100,7 +111,11 @@ int add_close_request(int socket) {
     struct request *req = malloc(sizeof(*req) + sizeof(struct iovec));
     req->type = CLOSE;
     req->socket = socket;
-    io_uring_prep_close(sqe, socket);
+    if (fixed_files) {
+        io_uring_prep_close_direct(sqe, socket);
+    } else {
+        io_uring_prep_close(sqe, socket);
+    }
     io_uring_sqe_set_data(sqe, req);
     if (async_sqes)
         io_uring_sqe_set_flags(sqe, IOSQE_ASYNC);
@@ -245,6 +260,7 @@ const char argp_program_doc[] =
 static const struct argp_option opts[] = {
     {"async", 'a', 0, 0, "Submit async requests"},
     {"batch", 'b', 0, 0, "Batch available work into single submission"},
+    {"fixed", 'f', 0, 0, "Use pre-allocated fixed files"},
     {"multishot", 'm', 0, 0, "Use multishot accept requests"},
     {"sqpoll", 'p', 0, 0, "Use submission queue polling in the kernel"},
     {"debug", 'd', 0, 0, "Provide debug output, repeat for more verbose debug"},
@@ -259,6 +275,9 @@ error_t parse_opts (int key, char *arg, struct argp_state *state)
         break;
     case 'b':
         batch = 1;
+        break;
+    case 'f':
+        fixed_files = 1;
         break;
     case 'm':
         multishot = 1;
@@ -286,10 +305,19 @@ int main(int argc, char *argv[]) {
     if (err)
         return 0;
 
-    int listen_socket = create_listen(SERVER_PORT);
-
     signal(SIGINT, signal_handler);
+
+    int files[MAX_FILES];
+    memset(files, -1, sizeof(files));
+
     io_uring_queue_init(QUEUE_DEPTH, &ring, sq_poll ? IORING_SETUP_SQPOLL : 0);
+    if (fixed_files) {
+        if (io_uring_register_files(&ring, files, MAX_FILES) < 0) {
+            fatal_error("io_uring_register_files");
+        }
+    }
+
+    int listen_socket = create_listen(SERVER_PORT);
     main_loop(listen_socket);
 
     return 0;
