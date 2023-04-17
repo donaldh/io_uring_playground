@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -16,7 +17,8 @@ enum event_type {
     ACCEPT,
     READ,
     WRITE,
-    CLOSE
+    CLOSE,
+    LOG
 };
 
 int async_sqes = 0;
@@ -43,6 +45,21 @@ void signal_handler(int num) {
 void fatal_error(const char *syscall) {
     perror(syscall);
     exit(1);
+}
+
+
+void ulog(const char *format, ...) {
+	char buffer[512];
+	va_list argp;
+	va_start(argp, format);
+	int len = vsnprintf(buffer, 512, format, argp);
+	va_end(argp);
+
+	struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+	struct request *req = malloc(sizeof(struct request));
+	req->type = LOG;
+	io_uring_prep_write(sqe, 2, buffer, len, 0);
+	io_uring_sqe_set_data(sqe, req);
 }
 
 int add_accept_request(int listen_socket,
@@ -151,18 +168,18 @@ void main_loop(int listen_socket) {
 
             struct request *req = (struct request *)cqe->user_data;
             if (cqe->res < 0) {
-                fprintf(stderr, "Async request failed: %s for event: %d\n",
-                        strerror(-cqe->res), req->type);
+                ulog("Async request failed: %s for event: %d\n",
+		     strerror(-cqe->res), req->type);
                 exit(1);
             }
 
             switch (req->type) {
             case ACCEPT:
-                if (debug > 1) fprintf(stderr, "ACCEPT %d%s\n", cqe->res,
+                if (debug > 1) ulog("ACCEPT %d%s\n", cqe->res,
                                    cqe->flags & IORING_CQE_F_MORE ? " (more)" : "");
 
                 if (!multishot || (cqe->flags & IORING_CQE_F_MORE) == 0) {
-                    if (debug > 2) fprintf(stderr, "Adding accept request\n");
+                    if (debug > 2) ulog("Adding accept request\n");
                     free(req);
                     add_accept_request(listen_socket, &client_addr, &client_addr_len);
                     submissions += 1;
@@ -171,7 +188,7 @@ void main_loop(int listen_socket) {
                 submissions += 1;
                 break;
             case READ:
-                if (debug > 1) fprintf(stderr, "READ %d\n", cqe->res);
+                if (debug > 1) ulog("READ %d\n", cqe->res);
                 if (cqe->res <= 0) {
                     add_close_request(req->socket);
                     submissions += 1;
@@ -184,15 +201,18 @@ void main_loop(int listen_socket) {
                 submissions += 2;
                 break;
             case WRITE:
-                if (debug > 1) fprintf(stderr, "WRITE %d\n", cqe->res);
+                if (debug > 1) ulog("WRITE %d\n", cqe->res);
                 free(req);
                 break;
             case CLOSE:
-                if (debug > 1) fprintf(stderr, "CLOSE %d returned %d\n", req->socket, cqe->res);
+                if (debug > 1) ulog("CLOSE %d returned %d\n", req->socket, cqe->res);
                 free(req);
                 break;
+	    case LOG:
+		    free(req);
+		    break;
             default:
-                fprintf(stderr, "Unexpected req type %d\n", req->type);
+                ulog("Unexpected req type %d\n", req->type);
                 break;
             }
 
@@ -207,7 +227,7 @@ void main_loop(int listen_socket) {
         }
 
         if (submissions > 0) {
-            if (debug) fprintf(stderr, "Submitting %d SQEs\n", submissions);
+            if (debug) ulog("Submitting %d SQEs\n", submissions);
             io_uring_submit(&ring);
         }
     }
